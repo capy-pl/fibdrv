@@ -4,6 +4,7 @@
 #include <linux/init.h>
 #include <linux/kdev_t.h>
 #include <linux/kernel.h>
+#include <linux/ktime.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 
@@ -24,9 +25,34 @@ static struct cdev *fib_cdev;
 static struct class *fib_class;
 static DEFINE_MUTEX(fib_mutex);
 
+static unsigned long long fib_doubling(long long k)
+{
+    if (k == 0)
+        return 0;
+    unsigned long long fn = 1;
+    unsigned long long fn1 = 1;
+    unsigned long long f2n = 1;
+    unsigned long long f2n1 = 0;
+    unsigned long long i = 1;
+    while (i < k) {
+        if ((i << 1) <= k) {
+            f2n1 = fn1 * fn1 + fn * fn;
+            f2n = fn * (2 * fn1 - fn);
+            fn = f2n;
+            fn1 = f2n1;
+            i = i << 1;
+        } else {
+            fn = f2n;
+            f2n = f2n1;
+            f2n1 = fn + f2n1;
+            i++;
+        }
+    }
+    return f2n;
+}
+
 static long long fib_sequence(long long k)
 {
-    /* FIXME: use clz/ctz and fast algorithms to speed up */
     long long f[k + 2];
 
     f[0] = 0;
@@ -60,7 +86,17 @@ static ssize_t fib_read(struct file *file,
                         size_t size,
                         loff_t *offset)
 {
-    return (ssize_t) fib_sequence(*offset);
+    ktime_t fib_sequence_elapse, fib_doubling_elapse;
+
+    fib_sequence_elapse = ktime_get_ns();
+    fib_sequence(*offset);
+    fib_sequence_elapse = ktime_sub_ns(ktime_get_ns(), fib_sequence_elapse);
+
+    fib_doubling_elapse = ktime_get_ns();
+    unsigned long long fib_doubling_result = fib_doubling(*offset);
+    fib_doubling_elapse = ktime_sub_ns(ktime_get_ns(), fib_doubling_elapse);
+    printk(KERN_INFO "%lld %lld", fib_sequence_elapse, fib_doubling_elapse);
+    return (ssize_t) fib_doubling_result;
 }
 
 /* write operation is skipped */
@@ -110,6 +146,7 @@ static int __init init_fib_dev(void)
 
     mutex_init(&fib_mutex);
 
+    printk(KERN_INFO "fib_dev initialized.");
     // Let's register the device
     // This will dynamically allocate the major number
     rc = alloc_chrdev_region(&fib_dev, 0, 1, DEV_FIBONACCI_NAME);
@@ -161,6 +198,7 @@ failed_cdev:
 
 static void __exit exit_fib_dev(void)
 {
+    printk(KERN_INFO "fib_dev exit.");
     mutex_destroy(&fib_mutex);
     device_destroy(fib_class, fib_dev);
     class_destroy(fib_class);
